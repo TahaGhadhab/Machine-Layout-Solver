@@ -47,3 +47,7 @@ def run_chaining(req: MatrixRequest):
 @app.post("/api/analyze")
 def run_analyze(req: FlowAnalysisRequest):
     return analysis.analyze(req.matrix, req.groups, req.routing)
+
+@app.api_route("/{path_name:path}", methods=["GET", "POST"])
+async def catch_all(path_name: str):
+    return {"status": "debug", "path_seen": path_name}
