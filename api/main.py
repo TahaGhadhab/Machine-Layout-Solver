@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import MatrixRequest, FlowAnalysisRequest
 from algorithms import king, chaining, analysis
 
-app = FastAPI(title="Machine Layout Solver API", root_path="/api")
+app = FastAPI(title="Machine Layout Solver API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -14,17 +14,19 @@ app.add_middleware(
 )
 
 @app.get("/")
+@app.get("/api")
+@app.get("/api/")
 def read_root():
     return {"status": "ok"}
 
-@app.post("/king")
+@app.post("/api/king")
 def run_king(req: MatrixRequest):
     return king.king_method(req.matrix)
 
-@app.post("/chaining")
+@app.post("/api/chaining")
 def run_chaining(req: MatrixRequest):
     return chaining.chaining_method(req.matrix)
 
-@app.post("/analyze")
+@app.post("/api/analyze")
 def run_analyze(req: FlowAnalysisRequest):
     return analysis.analyze(req.matrix, req.groups, req.routing)
