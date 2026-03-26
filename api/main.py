@@ -13,6 +13,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/{path:path}")
+async def catch_all(path: str):
+    return {"path_seen": path, "status": "debug"}
+
 @app.get("/")
 @app.get("/api")
 @app.get("/api/")
