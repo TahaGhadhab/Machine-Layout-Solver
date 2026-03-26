@@ -29,3 +29,7 @@ __pycache__/
 *$py.class
 venv/
 .env
+
+# Legacy folders
+frontend/
+backend/
