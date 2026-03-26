@@ -19,14 +19,17 @@ app.add_middleware(
 def read_root():
     return {"status": "ok"}
 
+@app.post("/king")
 @app.post("/api/king")
 def run_king(req: MatrixRequest):
     return king.king_method(req.matrix)
 
+@app.post("/chaining")
 @app.post("/api/chaining")
 def run_chaining(req: MatrixRequest):
     return chaining.chaining_method(req.matrix)
 
+@app.post("/analyze")
 @app.post("/api/analyze")
 def run_analyze(req: FlowAnalysisRequest):
     return analysis.analyze(req.matrix, req.groups, req.routing)
