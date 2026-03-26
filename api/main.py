@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from models import MatrixRequest, FlowAnalysisRequest
 from algorithms import king, chaining, analysis
 
-app = FastAPI(title="Machine Layout Solver API")
+app = FastAPI(title="Machine Layout Solver API", root_path="/api")
 
 app.add_middleware(
     CORSMiddleware,
