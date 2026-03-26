@@ -9,6 +9,7 @@ function App() {
         <header className="text-center mb-12">
           <h1 className="text-4xl md:text-5xl font-bold mb-4 tracking-tight">
             Machine Layout <span className="text-gradient">Solver</span>
+            <span className="text-xs font-normal text-slate-400 ml-2">v0.1.5-debug</span>
           </h1>
           <p className="text-slate-600 dark:text-slate-400 max-w-2xl mx-auto text-lg">
             Solve cell formation problems using King's method and the Chaining method. 
