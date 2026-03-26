@@ -8,7 +8,6 @@ interface Props {
 
 export const MatrixGrid: React.FC<Props> = ({ matrix, rowIndices, colIndices }) => {
   if (!matrix || matrix.length === 0) return null;
-  const cols = matrix[0].length;
 
   return (
     <div className="overflow-auto max-w-full">

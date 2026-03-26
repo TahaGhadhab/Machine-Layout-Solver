@@ -1,4 +1,3 @@
-import React from 'react';
 import { MatrixEditor } from './components/MatrixEditor';
 import { ControlPanel } from './components/ControlPanel';
 import { ResultsView } from './components/ResultsView';
