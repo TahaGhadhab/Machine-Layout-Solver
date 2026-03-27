@@ -66,11 +66,12 @@ def king_method(matrix: list[list[int]]):
 def detect_cells_king(matrix: list[list[int]], row_order: list[int], col_order: list[int]):
     """
     Detect block-diagonal cells in the reordered King matrix.
-    Scans top-left to bottom-right, greedily expanding each block.
+    Scans the reordered matrix top-left to bottom-right.
+    Each block only expands within rows/cols not yet claimed by a previous block.
     """
     A = np.array(matrix, dtype=int)
     n, m = A.shape
-    groups: dict[int, int] = {}   # machine_original_index → group_id
+    groups: dict[int, int] = {}      # machine_original_index → group_id
     part_cells: dict[int, int] = {}  # part_original_index → group_id
 
     row_ptr = 0
@@ -78,47 +79,59 @@ def detect_cells_king(matrix: list[list[int]], row_order: list[int], col_order: 
     group_id = 0
 
     while row_ptr < n:
-        # Start a new block at (row_ptr, col_ptr)
-        block_rows = [row_ptr]
-        block_cols = set(j for j in range(col_ptr, m) if A[row_ptr, j] == 1)
+        # Seed: collect columns hit by the current row (from col_ptr onward only)
+        seed_cols = set(j for j in range(col_ptr, m) if A[row_ptr, j] == 1)
 
-        if not block_cols:
-            # This machine has no parts from col_ptr onward — isolated
+        if not seed_cols:
+            # Row has no 1s from col_ptr onward — isolated machine, own group
             groups[row_order[row_ptr]] = group_id
             group_id += 1
             row_ptr += 1
             continue
 
+        # Grow block: only look at rows >= row_ptr and cols >= col_ptr
+        block_rows = set([row_ptr])
+        block_cols = seed_cols
+
         changed = True
         while changed:
             changed = False
-            # Expand rows: add any row that touches current block_cols
+            # Add rows (from row_ptr onward) that have a 1 in any block col
             for i in range(row_ptr, n):
-                if i not in [r - row_ptr + row_ptr for r in block_rows]:
-                    pass
-            # Simpler: expand until stable
-            new_rows = set(block_rows)
-            new_cols = set(block_cols)
-            for i in range(row_ptr, n):
-                if any(A[i, j] == 1 for j in new_cols):
-                    if i not in new_rows:
-                        new_rows.add(i)
+                if i not in block_rows:
+                    if any(A[i, j] == 1 for j in block_cols):
+                        block_rows.add(i)
                         changed = True
+            # Add cols (from col_ptr onward) that have a 1 in any block row
             for j in range(col_ptr, m):
-                if any(A[i, j] == 1 for i in new_rows):
-                    if j not in new_cols:
-                        new_cols.add(j)
+                if j not in block_cols:
+                    if any(A[i, j] == 1 for i in block_rows):
+                        block_cols.add(j)
                         changed = True
-            block_rows = sorted(new_rows)
-            block_cols = new_cols
 
-        for i in block_rows:
+        # Only assign rows that are contiguous from row_ptr
+        # (stop at first gap to avoid absorbing later blocks)
+        sorted_rows = sorted(block_rows)
+        contiguous_rows = []
+        for idx, r in enumerate(sorted_rows):
+            if idx == 0 or r == sorted_rows[idx - 1] + 1:
+                contiguous_rows.append(r)
+            else:
+                break  # gap found — stop here, remaining rows belong to next block
+
+        # Re-derive cols for only the contiguous rows
+        final_cols = set(
+            j for j in range(col_ptr, m)
+            if any(A[i, j] == 1 for i in contiguous_rows)
+        )
+
+        for i in contiguous_rows:
             groups[row_order[i]] = group_id
-        for j in block_cols:
+        for j in final_cols:
             part_cells[col_order[j]] = group_id
 
-        col_ptr = max(block_cols) + 1 if block_cols else col_ptr + 1
-        row_ptr = max(block_rows) + 1
+        col_ptr = max(final_cols) + 1 if final_cols else col_ptr + 1
+        row_ptr = max(contiguous_rows) + 1
         group_id += 1
 
     return groups, part_cells
