@@ -223,8 +223,3 @@ export const ResultsView: React.FC = () => {
     </div>
   );
 };
-```
-
-Copy that, go to:
-```
-https://github.com/TahaGhadhab/Machine-Layout-Solver/edit/main/frontend/src/components/ResultsView.tsx
