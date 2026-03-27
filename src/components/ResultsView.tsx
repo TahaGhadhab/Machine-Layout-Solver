@@ -27,13 +27,9 @@ export const ResultsView: React.FC = () => {
     );
   }
 
-  // Normalise field names
-  // API returns: reordered_matrix / row_order / col_order
-  // Old code expected: ordered_matrix / row_indices / col_indices
   const reorderedMatrix = results.reordered_matrix ?? results.ordered_matrix;
   const rowOrder        = results.row_order        ?? results.row_indices ?? [];
   const colOrder        = results.col_order        ?? results.col_indices ?? [];
-
   const efficiency      = results.efficiency ?? 0;
   const crossingFlows   = Array.isArray(results.crossing_flows)
     ? results.crossing_flows.length
@@ -55,7 +51,6 @@ export const ResultsView: React.FC = () => {
         )}
       </div>
 
-      {/* Tabs */}
       <div className="flex border-b border-slate-200 dark:border-slate-700 mb-6 overflow-x-auto hide-scrollbar">
         <button
           className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'matrix' ? 'border-brand-500 text-brand-600 dark:text-brand-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'}`}
@@ -81,30 +76,22 @@ export const ResultsView: React.FC = () => {
         )}
       </div>
 
-      {/* Tab content */}
       <div className="bg-slate-50/50 dark:bg-slate-900/50 rounded-xl p-4 flex-1 flex flex-col items-center justify-center border border-slate-100 dark:border-slate-800/50 overflow-hidden">
 
-        {/* KING - Matrix View */}
         {activeTab === 'matrix' && activeMethod === 'king' && (
           <div className="w-full">
             <div className="grid grid-cols-3 gap-4 mb-4">
               <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow-sm border border-slate-100 dark:border-slate-700">
                 <h3 className="text-xs text-slate-500 uppercase font-semibold mb-2">Efficiency Score</h3>
-                <p className="text-3xl font-light text-brand-600 dark:text-brand-400">
-                  {(efficiency * 100).toFixed(1)}%
-                </p>
+                <p className="text-3xl font-light text-brand-600 dark:text-brand-400">{(efficiency * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow-sm border border-slate-100 dark:border-slate-700">
                 <h3 className="text-xs text-slate-500 uppercase font-semibold mb-2">Cells Detected</h3>
-                <p className="text-3xl font-light text-emerald-500">
-                  {Object.keys(cellsSummary).length}
-                </p>
+                <p className="text-3xl font-light text-emerald-500">{Object.keys(cellsSummary).length}</p>
               </div>
               <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow-sm border border-slate-100 dark:border-slate-700">
                 <h3 className="text-xs text-slate-500 uppercase font-semibold mb-2">Exceptional Parts</h3>
-                <p className="text-3xl font-light text-rose-500">
-                  {exceptionalParts.length}
-                </p>
+                <p className="text-3xl font-light text-rose-500">{exceptionalParts.length}</p>
               </div>
             </div>
 
@@ -113,14 +100,10 @@ export const ResultsView: React.FC = () => {
                 <h3 className="text-sm font-semibold mb-3 text-slate-700 dark:text-slate-300">
                   Reordered Matrix
                   <span className="ml-2 text-xs font-normal text-slate-400">
-                    (rows: machines in order {rowOrder.map((r: number) => `M${r + 1}`).join(' → ')})
+                    (rows: {rowOrder.map((r: number) => `M${r + 1}`).join(' → ')})
                   </span>
                 </h3>
-                <MatrixGrid
-                  matrix={reorderedMatrix}
-                  rowIndices={rowOrder}
-                  colIndices={colOrder}
-                />
+                <MatrixGrid matrix={reorderedMatrix} rowIndices={rowOrder} colIndices={colOrder} />
               </div>
             ) : (
               <p className="text-slate-400 text-sm">No reordered matrix returned.</p>
@@ -130,10 +113,7 @@ export const ResultsView: React.FC = () => {
               <h3 className="text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">Machine Cells</h3>
               <div className="flex gap-2 flex-wrap">
                 {Object.entries(groups).map(([m, g]) => (
-                  <div
-                    key={m}
-                    className="px-3 py-1 rounded text-sm font-medium border bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-300 border-brand-200 dark:border-brand-800"
-                  >
+                  <div key={m} className="px-3 py-1 rounded text-sm font-medium border bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-300 border-brand-200 dark:border-brand-800">
                     M{parseInt(m) + 1} → Cell {g as React.ReactNode}
                   </div>
                 ))}
@@ -142,15 +122,10 @@ export const ResultsView: React.FC = () => {
 
             {exceptionalParts.length > 0 && (
               <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow-sm border border-rose-100 dark:border-rose-900/40">
-                <h3 className="text-sm font-semibold mb-2 text-rose-600 dark:text-rose-400">
-                  Exceptional Parts (Hors Trame)
-                </h3>
+                <h3 className="text-sm font-semibold mb-2 text-rose-600 dark:text-rose-400">Exceptional Parts (Hors Trame)</h3>
                 <div className="flex gap-2 flex-wrap">
                   {exceptionalParts.map((p: number) => (
-                    <div
-                      key={p}
-                      className="px-3 py-1 rounded text-sm font-medium border bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
-                    >
+                    <div key={p} className="px-3 py-1 rounded text-sm font-medium border bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800">
                       P{p + 1}
                     </div>
                   ))}
@@ -160,15 +135,12 @@ export const ResultsView: React.FC = () => {
           </div>
         )}
 
-        {/* CHAINING - Matrix View */}
         {activeTab === 'matrix' && activeMethod === 'chaining' && (
           <div className="w-full text-left">
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow-sm border border-slate-100 dark:border-slate-700">
                 <h3 className="text-xs text-slate-500 uppercase font-semibold mb-2">Efficiency Score</h3>
-                <p className="text-3xl font-light text-brand-600 dark:text-brand-400">
-                  {(efficiency * 100).toFixed(1)}%
-                </p>
+                <p className="text-3xl font-light text-brand-600 dark:text-brand-400">{(efficiency * 100).toFixed(1)}%</p>
               </div>
               <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow-sm border border-slate-100 dark:border-slate-700">
                 <h3 className="text-xs text-slate-500 uppercase font-semibold mb-2">Crossing Flows</h3>
@@ -180,10 +152,7 @@ export const ResultsView: React.FC = () => {
               <h3 className="text-sm font-semibold mb-2 text-slate-700 dark:text-slate-300">Machine Grouping</h3>
               <div className="flex gap-2 flex-wrap">
                 {Object.entries(groups).map(([m, g]) => (
-                  <div
-                    key={m}
-                    className="px-3 py-1 rounded text-sm font-medium border bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-300 border-brand-200 dark:border-brand-800"
-                  >
+                  <div key={m} className="px-3 py-1 rounded text-sm font-medium border bg-brand-50 dark:bg-brand-900/20 text-brand-700 dark:text-brand-300 border-brand-200 dark:border-brand-800">
                     M{parseInt(m) + 1} → Cell {g as React.ReactNode}
                   </div>
                 ))}
@@ -192,15 +161,10 @@ export const ResultsView: React.FC = () => {
 
             {exceptionalParts.length > 0 && (
               <div className="bg-white dark:bg-slate-800 p-4 rounded-lg shadow-sm border border-rose-100 dark:border-rose-900/40 mt-4">
-                <h3 className="text-sm font-semibold mb-2 text-rose-600 dark:text-rose-400">
-                  Exceptional Parts (Hors Trame)
-                </h3>
+                <h3 className="text-sm font-semibold mb-2 text-rose-600 dark:text-rose-400">Exceptional Parts (Hors Trame)</h3>
                 <div className="flex gap-2 flex-wrap">
                   {exceptionalParts.map((p: number) => (
-                    <div
-                      key={p}
-                      className="px-3 py-1 rounded text-sm font-medium border bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800"
-                    >
+                    <div key={p} className="px-3 py-1 rounded text-sm font-medium border bg-rose-50 dark:bg-rose-900/20 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800">
                       P{p + 1}
                     </div>
                   ))}
@@ -210,12 +174,10 @@ export const ResultsView: React.FC = () => {
           </div>
         )}
 
-        {/* Triangular schema */}
         {activeTab === 'triangular' && activeMethod === 'chaining' && results.link_matrix && (
           <TriangularSchema matrix={results.link_matrix} />
         )}
 
-        {/* Graph view */}
         {activeTab === 'graph' && activeMethod === 'chaining' && results.link_matrix && groups && (
           <GraphView matrix={results.link_matrix} groups={groups} />
         )}
