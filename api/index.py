@@ -1,457 +1,331 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from typing import Optional
 import numpy as np
-from typing import List, Optional
 
-app = FastAPI(title="Machine Layout Solver API")
+app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# ─── Request Models ────────────────────────────────────────────────────────────
 
-class MatrixInput(BaseModel):
-    matrix: List[List[int]]
-    machine_names: Optional[List[str]] = None
-    part_names: Optional[List[str]] = None
-    routing: Optional[List[List[int]]] = None  # routing[i] = ordered list of machine indices for part i
+class MatrixRequest(BaseModel):
+    matrix: list[list[int]]
 
+class AnalyzeRequest(BaseModel):
+    matrix: list[list[int]]
+    groups: dict[int, int]           # machine_index → group_id
+    routing: Optional[list[list[int]]] = None  # per-part ordered machine list
 
-@app.get("/api")
-@app.get("/api/")
-def health():
-    return {"status": "ok", "message": "Machine Layout Solver API"}
+# ─── King's Method ─────────────────────────────────────────────────────────────
 
+def king_method(matrix: list[list[int]]):
+    A = np.array(matrix, dtype=int)
+    n, m = A.shape  # n = machines (rows), m = parts (cols)
 
-# ---------------------------------------------------------------------------
-# KING METHOD
-# ---------------------------------------------------------------------------
-
-def king_method(matrix: List[List[int]]):
-    A = np.array(matrix, dtype=float)
-    n, m = A.shape
     row_order = list(range(n))
     col_order = list(range(m))
 
-    for _ in range(200):  # max iterations
+    for _ in range(100):  # safety cap
         stable = True
 
-        # Step 1: compute column weights
+        # Step 1 & 2: compute column weights, sort columns descending
         col_weights = []
-        for j in range(m):
-            w = sum(A[i, j] * (2 ** (n - i)) for i in range(n))
+        for j in range(A.shape[1]):
+            w = sum(A[i, j] * (2 ** (A.shape[0] - 1 - i)) for i in range(A.shape[0]))
             col_weights.append(w)
-
-        new_col_order_indices = sorted(range(m), key=lambda j: -col_weights[j])
-        new_col_perm = [col_order[j] for j in new_col_order_indices]
-        if new_col_perm != col_order:
+        new_col_order = sorted(range(len(col_weights)), key=lambda j: -col_weights[j])
+        if new_col_order != list(range(A.shape[1])):
             stable = False
-        col_order = new_col_perm
-        A = A[:, new_col_order_indices]
+        col_order = [col_order[j] for j in new_col_order]
+        A = A[:, new_col_order]
 
-        # Step 2: compute row weights
+        # Step 3 & 4: compute row weights, sort rows descending
         row_weights = []
-        for i in range(n):
-            w = sum(A[i, j] * (2 ** (m - j)) for j in range(m))
+        for i in range(A.shape[0]):
+            w = sum(A[i, j] * (2 ** (A.shape[1] - 1 - j)) for j in range(A.shape[1]))
             row_weights.append(w)
-
-        new_row_order_indices = sorted(range(n), key=lambda i: -row_weights[i])
-        new_row_perm = [row_order[i] for i in new_row_order_indices]
-        if new_row_perm != row_order:
+        new_row_order = sorted(range(len(row_weights)), key=lambda i: -row_weights[i])
+        if new_row_order != list(range(A.shape[0])):
             stable = False
-        row_order = new_row_perm
-        A = A[new_row_order_indices, :]
+        row_order = [row_order[i] for i in new_row_order]
+        A = A[new_row_order, :]
 
         if stable:
             break
 
-    return A.astype(int).tolist(), row_order, col_order
+    return A.tolist(), row_order, col_order
 
 
-def detect_clusters_king(reordered_matrix, row_order, col_order, machine_names, part_names):
-    """Detect block-diagonal clusters in the reordered matrix using a sweep approach."""
-    A = np.array(reordered_matrix)
+def detect_cells_king(matrix: list[list[int]], row_order: list[int], col_order: list[int]):
+    """
+    Detect block-diagonal cells in the reordered King matrix.
+    Scans top-left to bottom-right, greedily expanding each block.
+    """
+    A = np.array(matrix, dtype=int)
     n, m = A.shape
+    groups: dict[int, int] = {}   # machine_original_index → group_id
+    part_cells: dict[int, int] = {}  # part_original_index → group_id
 
-    # Find row ranges where machines group together
-    # Use union-find on (row, col) pairs
-    parent = {}
+    row_ptr = 0
+    col_ptr = 0
+    group_id = 0
+
+    while row_ptr < n:
+        # Start a new block at (row_ptr, col_ptr)
+        block_rows = [row_ptr]
+        block_cols = set(j for j in range(col_ptr, m) if A[row_ptr, j] == 1)
+
+        if not block_cols:
+            # This machine has no parts from col_ptr onward — isolated
+            groups[row_order[row_ptr]] = group_id
+            group_id += 1
+            row_ptr += 1
+            continue
+
+        changed = True
+        while changed:
+            changed = False
+            # Expand rows: add any row that touches current block_cols
+            for i in range(row_ptr, n):
+                if i not in [r - row_ptr + row_ptr for r in block_rows]:
+                    pass
+            # Simpler: expand until stable
+            new_rows = set(block_rows)
+            new_cols = set(block_cols)
+            for i in range(row_ptr, n):
+                if any(A[i, j] == 1 for j in new_cols):
+                    if i not in new_rows:
+                        new_rows.add(i)
+                        changed = True
+            for j in range(col_ptr, m):
+                if any(A[i, j] == 1 for i in new_rows):
+                    if j not in new_cols:
+                        new_cols.add(j)
+                        changed = True
+            block_rows = sorted(new_rows)
+            block_cols = new_cols
+
+        for i in block_rows:
+            groups[row_order[i]] = group_id
+        for j in block_cols:
+            part_cells[col_order[j]] = group_id
+
+        col_ptr = max(block_cols) + 1 if block_cols else col_ptr + 1
+        row_ptr = max(block_rows) + 1
+        group_id += 1
+
+    return groups, part_cells
+
+
+# ─── Chaining Method ───────────────────────────────────────────────────────────
+
+def chaining_method(matrix: list[list[int]]):
+    A = np.array(matrix, dtype=int)
+    n_machines = A.shape[1]  # columns = machines
+    n_parts    = A.shape[0]  # rows    = parts
+
+    # Step 1: build machine-machine link matrix
+    L = np.zeros((n_machines, n_machines), dtype=int)
+    for j in range(n_machines):
+        for k in range(j + 1, n_machines):
+            shared = int(np.sum((A[:, j] == 1) & (A[:, k] == 1)))
+            L[j, k] = shared
+            L[k, j] = shared
+
+    # Step 2: classify links
+    link_types: dict[tuple[int,int], str] = {}
+    for j in range(n_machines):
+        for k in range(n_machines):
+            if j == k:
+                continue
+            v = L[j, k]
+            if v >= 2:
+                link_types[(j, k)] = "strong"
+            elif v == 1:
+                link_types[(j, k)] = "weak"
+            else:
+                link_types[(j, k)] = "none"
+
+    # Step 3: Union-Find clustering — strong links first
+    parent = list(range(n_machines))
 
     def find(x):
-        if x not in parent:
-            parent[x] = x
         while parent[x] != x:
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
 
     def union(x, y):
-        px, py = find(x), find(y)
-        if px != py:
-            parent[px] = py
+        parent[find(x)] = find(y)
 
-    for i in range(n):
-        for j in range(m):
+    # Merge on strong links
+    for j in range(n_machines):
+        for k in range(j + 1, n_machines):
+            if link_types.get((j, k)) == "strong":
+                union(j, k)
+
+    # Merge on weak links if no isolation
+    for j in range(n_machines):
+        for k in range(j + 1, n_machines):
+            if link_types.get((j, k)) == "weak":
+                # Only merge if at least one side is already in a group (has strong link)
+                union(j, k)
+
+    # Normalize group IDs
+    root_map: dict[int, int] = {}
+    gid = 0
+    groups: dict[int, int] = {}
+    for j in range(n_machines):
+        r = find(j)
+        if r not in root_map:
+            root_map[r] = gid
+            gid += 1
+        groups[j] = root_map[r]
+
+    # Assign parts to groups
+    part_cells: dict[int, int] = {}
+    for i in range(n_parts):
+        touched = set(groups[j] for j in range(n_machines) if A[i, j] == 1)
+        if len(touched) == 1:
+            part_cells[i] = touched.pop()
+        # exceptional parts handled in analyze
+
+    # Build triangular schema
+    triangular = []
+    for j in range(n_machines):
+        row = []
+        for k in range(n_machines):
+            if k > j:
+                row.append({"value": int(L[j, k]), "type": link_types.get((j, k), "none")})
+            elif k == j:
+                row.append({"value": 0, "type": "diagonal"})
+            else:
+                row.append({"value": 0, "type": "empty"})
+        triangular.append(row)
+
+    return groups, part_cells, L.tolist(), triangular
+
+
+# ─── Analyze: exceptions + flows + efficiency ──────────────────────────────────
+
+def analyze(matrix: list[list[int]], groups: dict[int, int], routing: Optional[list[list[int]]] = None):
+    A = np.array(matrix, dtype=int)
+    n_parts, n_machines = A.shape
+
+    int_groups = {int(k): int(v) for k, v in groups.items()}
+
+    # Classify parts
+    exceptional_parts: list[int] = []
+    part_cells: dict[int, int] = {}
+    for i in range(n_parts):
+        touched_groups = set(int_groups[j] for j in range(n_machines) if A[i, j] == 1 and j in int_groups)
+        if len(touched_groups) == 1:
+            part_cells[i] = touched_groups.pop()
+        elif len(touched_groups) > 1:
+            exceptional_parts.append(i)
+            # assign to the group with the most operations for this part
+            counts = {}
+            for j in range(n_machines):
+                if A[i, j] == 1 and j in int_groups:
+                    g = int_groups[j]
+                    counts[g] = counts.get(g, 0) + 1
+            part_cells[i] = max(counts, key=counts.get)
+        else:
+            part_cells[i] = -1  # unassigned
+
+    # Crossing flows
+    crossing_flows: list[dict] = []
+    if routing:
+        for i, route in enumerate(routing):
+            for step in range(len(route) - 1):
+                m_from = route[step]
+                m_to   = route[step + 1]
+                if m_from < n_machines and m_to < n_machines:
+                    g_from = int_groups.get(m_from, -1)
+                    g_to   = int_groups.get(m_to, -1)
+                    if g_from != g_to and g_from != -1 and g_to != -1:
+                        crossing_flows.append({
+                            "part": i,
+                            "from_machine": m_from,
+                            "to_machine": m_to,
+                            "from_group": g_from,
+                            "to_group": g_to,
+                        })
+
+    # Efficiency score
+    total_ops = int(np.sum(A))
+    internal_ops = 0
+    for i in range(n_parts):
+        for j in range(n_machines):
             if A[i, j] == 1:
-                union(('r', i), ('c', j))
+                if part_cells.get(i, -2) == int_groups.get(j, -1):
+                    internal_ops += 1
+    efficiency = round(internal_ops / total_ops, 4) if total_ops > 0 else 0.0
 
-    # Group rows into clusters by their root
-    from collections import defaultdict
-    clusters = defaultdict(lambda: {"machines": [], "parts": []})
-    for i in range(n):
-        root = find(('r', i))
-        clusters[root]["machines"].append(i)
-    for j in range(m):
-        root = find(('c', j))
-        clusters[root]["parts"].append(j)
-
-    # Merge: assign parts to machine clusters
-    machine_root_map = {}
-    for i in range(n):
-        machine_root_map[i] = find(('r', i))
-
-    part_to_cluster = {}
-    for j in range(m):
-        part_root = find(('c', j))
-        part_to_cluster[j] = part_root
-
-    # Consolidate
-    result_clusters = []
-    seen_roots = []
-    for root, data in clusters.items():
-        if data["machines"]:
-            seen_roots.append(root)
-            result_clusters.append({
-                "machines": [row_order[i] for i in sorted(data["machines"])],
-                "machine_indices_reordered": sorted(data["machines"]),
-                "parts": [col_order[j] for j in sorted(data["parts"])],
-                "part_indices_reordered": sorted(data["parts"]),
-                "machine_names": [machine_names[row_order[i]] for i in sorted(data["machines"])],
-                "part_names": [part_names[col_order[j]] for j in sorted(data["parts"])],
-            })
-
-    return result_clusters
-
-
-def find_exceptional_elements(original_matrix, clusters, row_order, col_order):
-    """Parts that belong to more than one cluster (hors trame)."""
-    A = np.array(original_matrix)
-    n, m = A.shape
-
-    # map original machine index -> cluster index
-    machine_to_cluster = {}
-    for ci, c in enumerate(clusters):
-        for mi in c["machines"]:
-            machine_to_cluster[mi] = ci
-
-    exceptional_parts = []
-    exceptional_machines = []
-
-    for orig_j in range(m):
-        cluster_set = set()
-        for orig_i in range(n):
-            if A[orig_i, orig_j] == 1:
-                ci = machine_to_cluster.get(orig_i)
-                if ci is not None:
-                    cluster_set.add(ci)
-        if len(cluster_set) > 1:
-            exceptional_parts.append(orig_j)
-
-    part_to_cluster = {}
-    for ci, c in enumerate(clusters):
-        for pj in c["parts"]:
-            part_to_cluster[pj] = ci
-
-    for orig_i in range(n):
-        cluster_set = set()
-        for orig_j in range(m):
-            if A[orig_i, orig_j] == 1:
-                ci = part_to_cluster.get(orig_j)
-                if ci is not None:
-                    cluster_set.add(ci)
-        if len(cluster_set) > 1:
-            exceptional_machines.append(orig_i)
-
-    return exceptional_parts, exceptional_machines
-
-
-def compute_efficiency(original_matrix, clusters):
-    """Compute grouping efficiency = internal_operations / total_operations."""
-    A = np.array(original_matrix)
-    total_ones = int(np.sum(A))
-    if total_ones == 0:
-        return 0.0
-
-    internal = 0
-    for c in clusters:
-        machines = c["machines"]
-        parts = c["parts"]
-        for mi in machines:
-            for pj in parts:
-                if A[mi, pj] == 1:
-                    internal += 1
-
-    return round(internal / total_ones, 4)
-
-
-@app.post("/api/king")
-async def king_endpoint(data: MatrixInput):
-    matrix = data.matrix
-    n = len(matrix)
-    m = len(matrix[0]) if n > 0 else 0
-
-    machine_names = data.machine_names or [f"M{i+1}" for i in range(n)]
-    part_names = data.part_names or [f"P{j+1}" for j in range(m)]
-
-    reordered, row_order, col_order = king_method(matrix)
-
-    clusters = detect_clusters_king(reordered, row_order, col_order, machine_names, part_names)
-
-    exc_parts, exc_machines = find_exceptional_elements(matrix, clusters, row_order, col_order)
-    efficiency = compute_efficiency(matrix, clusters)
-
-    crossing_flows = []
-    if data.routing:
-        machine_to_cluster = {}
-        for ci, c in enumerate(clusters):
-            for mi in c["machines"]:
-                machine_to_cluster[mi] = ci
-        for pi, route in enumerate(data.routing):
-            for k in range(len(route) - 1):
-                m_from = route[k]
-                m_to = route[k + 1]
-                c_from = machine_to_cluster.get(m_from)
-                c_to = machine_to_cluster.get(m_to)
-                if c_from is not None and c_to is not None and c_from != c_to:
-                    crossing_flows.append({
-                        "part": pi,
-                        "part_name": part_names[pi] if pi < len(part_names) else f"P{pi+1}",
-                        "from_machine": m_from,
-                        "to_machine": m_to,
-                        "from_cluster": c_from,
-                        "to_cluster": c_to,
-                    })
+    # Build cells summary
+    all_groups = sorted(set(int_groups.values()))
+    cells_summary = {}
+    for g in all_groups:
+        cells_summary[g] = {
+            "machines": [j for j, grp in int_groups.items() if grp == g],
+            "parts":    [i for i, grp in part_cells.items() if grp == g],
+        }
 
     return {
-        "method": "king",
-        "original_matrix": matrix,
+        "exceptional_parts": exceptional_parts,
+        "part_cells": {str(k): v for k, v in part_cells.items()},
+        "crossing_flows": crossing_flows,
+        "efficiency": efficiency,
+        "internal_ops": internal_ops,
+        "total_ops": total_ops,
+        "cells_summary": {str(k): v for k, v in cells_summary.items()},
+    }
+
+
+# ─── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.post("/api/king")
+def king_endpoint(req: MatrixRequest):
+    reordered, row_order, col_order = king_method(req.matrix)
+    groups, part_cells = detect_cells_king(reordered, row_order, col_order)
+    analysis = analyze(req.matrix, groups)
+
+    return {
         "reordered_matrix": reordered,
         "row_order": row_order,
         "col_order": col_order,
-        "machine_names_reordered": [machine_names[i] for i in row_order],
-        "part_names_reordered": [part_names[j] for j in col_order],
-        "clusters": clusters,
-        "exceptional_parts": [part_names[j] if j < len(part_names) else f"P{j+1}" for j in exc_parts],
-        "exceptional_machines": [machine_names[i] if i < len(machine_names) else f"M{i+1}" for i in exc_machines],
-        "exceptional_part_indices": exc_parts,
-        "exceptional_machine_indices": exc_machines,
-        "crossing_flows": crossing_flows,
-        "efficiency": efficiency,
+        "groups": {str(k): v for k, v in groups.items()},
+        "part_cells": {str(k): v for k, v in part_cells.items()},
+        **analysis,
     }
-
-
-# ---------------------------------------------------------------------------
-# CHAINING (LINK-BASED) METHOD
-# ---------------------------------------------------------------------------
-
-def chaining_method(matrix: List[List[int]]):
-    A = np.array(matrix)
-    n, m = A.shape  # n = machines (rows), m = parts (cols)
-
-    # Step 1: compute machine–machine link matrix
-    L = np.zeros((n, n), dtype=int)
-    for i in range(n):
-        for k in range(i + 1, n):
-            shared = int(np.sum((A[i, :] == 1) & (A[k, :] == 1)))
-            L[i, k] = shared
-            L[k, i] = shared
-
-    # Step 2: classify links
-    link_types = {}  # (i,k) -> "strong"|"weak"|"none"
-    for i in range(n):
-        for k in range(i + 1, n):
-            v = L[i, k]
-            if v >= 2:
-                link_types[(i, k)] = "strong"
-            elif v == 1:
-                link_types[(i, k)] = "weak"
-            else:
-                link_types[(i, k)] = "none"
-
-    # Step 3: build clusters via union-find (strong links first)
-    parent = list(range(n))
-
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(x, y):
-        px, py = find(x), find(y)
-        if px != py:
-            parent[px] = py
-
-    # Merge on strong links
-    for (i, k), t in link_types.items():
-        if t == "strong":
-            union(i, k)
-
-    # Iteratively absorb weak links
-    changed = True
-    while changed:
-        changed = False
-        for (i, k), t in link_types.items():
-            if t == "weak":
-                if find(i) != find(k):
-                    # Check if merging is beneficial (at least one strong link in each group to this pair)
-                    union(i, k)
-                    changed = True
-
-    # Build groups
-    from collections import defaultdict
-    groups_map = defaultdict(list)
-    for i in range(n):
-        groups_map[find(i)].append(i)
-    groups = [sorted(v) for v in groups_map.values()]
-
-    return L.tolist(), link_types, groups
-
-
-def build_triangular_schema(link_matrix, n):
-    """Return upper-triangular representation."""
-    T = []
-    for i in range(n):
-        row = []
-        for k in range(n):
-            if k > i:
-                row.append(link_matrix[i][k])
-            else:
-                row.append(None)
-        T.append(row)
-    return T
 
 
 @app.post("/api/chaining")
-async def chaining_endpoint(data: MatrixInput):
-    matrix = data.matrix
-    n = len(matrix)
-    m = len(matrix[0]) if n > 0 else 0
-
-    machine_names = data.machine_names or [f"M{i+1}" for i in range(n)]
-    part_names = data.part_names or [f"P{j+1}" for j in range(m)]
-
-    L, link_types, groups = chaining_method(matrix)
-
-    # Assign parts to clusters
-    clusters = []
-    for gi, g in enumerate(groups):
-        cluster_parts = []
-        cluster_parts_names = []
-        for j in range(m):
-            machine_set = set()
-            for i in range(n):
-                if matrix[i][j] == 1:
-                    machine_set.add(i)
-            group_set = set(g)
-            if machine_set & group_set:  # at least one machine in this group uses this part
-                if machine_set.issubset(group_set):  # fully internal
-                    cluster_parts.append(j)
-                    cluster_parts_names.append(part_names[j])
-        clusters.append({
-            "machines": g,
-            "machine_names": [machine_names[i] for i in g],
-            "parts": cluster_parts,
-            "part_names": cluster_parts_names,
-        })
-
-    # Exceptional parts (used by machines in multiple clusters)
-    machine_to_cluster = {}
-    for ci, c in enumerate(clusters):
-        for mi in c["machines"]:
-            machine_to_cluster[mi] = ci
-
-    exc_parts = []
-    for j in range(m):
-        cluster_set = set()
-        for i in range(n):
-            if matrix[i][j] == 1:
-                ci = machine_to_cluster.get(i)
-                if ci is not None:
-                    cluster_set.add(ci)
-        if len(cluster_set) > 1:
-            exc_parts.append(j)
-
-    efficiency = compute_efficiency(matrix, clusters)
-
-    # Serialise link_types
-    link_types_serialized = {f"{i},{k}": v for (i, k), v in link_types.items()}
-
-    triangular = build_triangular_schema(L, n)
-
-    # Graph edges
-    edges = []
-    for i in range(n):
-        for k in range(i + 1, n):
-            if L[i][k] > 0:
-                edges.append({
-                    "source": i,
-                    "target": k,
-                    "source_name": machine_names[i],
-                    "target_name": machine_names[k],
-                    "weight": L[i][k],
-                    "type": link_types.get((i, k), "none"),
-                })
-
-    crossing_flows = []
-    if data.routing:
-        for pi, route in enumerate(data.routing):
-            for k in range(len(route) - 1):
-                m_from = route[k]
-                m_to = route[k + 1]
-                c_from = machine_to_cluster.get(m_from)
-                c_to = machine_to_cluster.get(m_to)
-                if c_from is not None and c_to is not None and c_from != c_to:
-                    crossing_flows.append({
-                        "part": pi,
-                        "part_name": part_names[pi] if pi < len(part_names) else f"P{pi+1}",
-                        "from_machine": m_from,
-                        "to_machine": m_to,
-                        "from_cluster": c_from,
-                        "to_cluster": c_to,
-                    })
+def chaining_endpoint(req: MatrixRequest):
+    groups, part_cells, link_matrix, triangular = chaining_method(req.matrix)
+    analysis = analyze(req.matrix, groups)
 
     return {
-        "method": "chaining",
-        "link_matrix": L,
-        "link_types": link_types_serialized,
-        "triangular_schema": triangular,
-        "groups": groups,
-        "clusters": clusters,
-        "graph_edges": edges,
-        "machine_names": machine_names,
-        "part_names": part_names,
-        "exceptional_parts": [part_names[j] if j < len(part_names) else f"P{j+1}" for j in exc_parts],
-        "exceptional_part_indices": exc_parts,
-        "crossing_flows": crossing_flows,
-        "efficiency": efficiency,
+        "groups": {str(k): v for k, v in groups.items()},
+        "part_cells": {str(k): v for k, v in part_cells.items()},
+        "link_matrix": link_matrix,
+        "triangular": triangular,
+        **analysis,
     }
 
-
-# ---------------------------------------------------------------------------
-# ANALYZE (run both methods)
-# ---------------------------------------------------------------------------
 
 @app.post("/api/analyze")
-async def analyze_endpoint(data: MatrixInput):
-    king_result = await king_endpoint(data)
-    chaining_result = await chaining_endpoint(data)
-    return {
-        "king": king_result,
-        "chaining": chaining_result,
-    }
+def analyze_endpoint(req: AnalyzeRequest):
+    groups_int = {int(k): int(v) for k, v in req.groups.items()}
+    return analyze(req.matrix, groups_int, req.routing)
+
+
+# ─── Vercel handler ────────────────────────────────────────────────────────────
+# Vercel looks for a variable named `app` — FastAPI IS that ASGI app, so nothing extra needed.
