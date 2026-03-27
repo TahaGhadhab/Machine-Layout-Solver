@@ -1,172 +1,121 @@
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional
-import numpy as np
+from http.server import BaseHTTPRequestHandler
+import json
 
-app = FastAPI()
+# ─── Pure Python algorithms (no numpy needed) ──────────────────────────────────
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ─── Request Models ────────────────────────────────────────────────────────────
-
-class MatrixRequest(BaseModel):
-    matrix: list[list[int]]
-
-class AnalyzeRequest(BaseModel):
-    matrix: list[list[int]]
-    groups: dict[int, int]           # machine_index → group_id
-    routing: Optional[list[list[int]]] = None  # per-part ordered machine list
-
-# ─── King's Method ─────────────────────────────────────────────────────────────
-
-def king_method(matrix: list[list[int]]):
-    A = np.array(matrix, dtype=int)
-    n, m = A.shape  # n = machines (rows), m = parts (cols)
-
+def king_method(matrix):
+    A = [row[:] for row in matrix]
+    n = len(A)
+    m = len(A[0]) if A else 0
     row_order = list(range(n))
     col_order = list(range(m))
 
-    for _ in range(100):  # safety cap
+    for _ in range(100):
         stable = True
 
-        # Step 1 & 2: compute column weights, sort columns descending
         col_weights = []
-        for j in range(A.shape[1]):
-            w = sum(A[i, j] * (2 ** (A.shape[0] - 1 - i)) for i in range(A.shape[0]))
+        for j in range(len(A[0])):
+            w = sum(A[i][j] * (2 ** (len(A) - 1 - i)) for i in range(len(A)))
             col_weights.append(w)
-        new_col_order = sorted(range(len(col_weights)), key=lambda j: -col_weights[j])
-        if new_col_order != list(range(A.shape[1])):
+        new_col_idx = sorted(range(len(col_weights)), key=lambda j: -col_weights[j])
+        if new_col_idx != list(range(len(A[0]))):
             stable = False
-        col_order = [col_order[j] for j in new_col_order]
-        A = A[:, new_col_order]
+        col_order = [col_order[j] for j in new_col_idx]
+        A = [[A[i][j] for j in new_col_idx] for i in range(len(A))]
 
-        # Step 3 & 4: compute row weights, sort rows descending
         row_weights = []
-        for i in range(A.shape[0]):
-            w = sum(A[i, j] * (2 ** (A.shape[1] - 1 - j)) for j in range(A.shape[1]))
+        for i in range(len(A)):
+            w = sum(A[i][j] * (2 ** (len(A[0]) - 1 - j)) for j in range(len(A[0])))
             row_weights.append(w)
-        new_row_order = sorted(range(len(row_weights)), key=lambda i: -row_weights[i])
-        if new_row_order != list(range(A.shape[0])):
+        new_row_idx = sorted(range(len(row_weights)), key=lambda i: -row_weights[i])
+        if new_row_idx != list(range(len(A))):
             stable = False
-        row_order = [row_order[i] for i in new_row_order]
-        A = A[new_row_order, :]
+        row_order = [row_order[i] for i in new_row_idx]
+        A = [A[i] for i in new_row_idx]
 
         if stable:
             break
 
-    return A.tolist(), row_order, col_order
+    return A, row_order, col_order
 
 
-def detect_cells_king(matrix: list[list[int]], row_order: list[int], col_order: list[int]):
-    """
-    Detect block-diagonal cells in the reordered King matrix.
-    Scans the reordered matrix top-left to bottom-right.
-    Each block only expands within rows/cols not yet claimed by a previous block.
-    """
-    A = np.array(matrix, dtype=int)
-    n, m = A.shape
-    groups: dict[int, int] = {}      # machine_original_index → group_id
-    part_cells: dict[int, int] = {}  # part_original_index → group_id
-
+def detect_cells_king(A, row_order, col_order):
+    n = len(A)
+    m = len(A[0]) if A else 0
+    groups = {}
+    part_cells = {}
     row_ptr = 0
     col_ptr = 0
     group_id = 0
 
     while row_ptr < n:
-        # Seed: collect columns hit by the current row (from col_ptr onward only)
-        seed_cols = set(j for j in range(col_ptr, m) if A[row_ptr, j] == 1)
+        seed_cols = set(j for j in range(col_ptr, m) if A[row_ptr][j] == 1)
 
         if not seed_cols:
-            # Row has no 1s from col_ptr onward — isolated machine, own group
             groups[row_order[row_ptr]] = group_id
             group_id += 1
             row_ptr += 1
             continue
 
-        # Grow block: only look at rows >= row_ptr and cols >= col_ptr
-        block_rows = set([row_ptr])
+        block_rows = {row_ptr}
         block_cols = seed_cols
 
         changed = True
         while changed:
             changed = False
-            # Add rows (from row_ptr onward) that have a 1 in any block col
             for i in range(row_ptr, n):
-                if i not in block_rows:
-                    if any(A[i, j] == 1 for j in block_cols):
-                        block_rows.add(i)
-                        changed = True
-            # Add cols (from col_ptr onward) that have a 1 in any block row
+                if i not in block_rows and any(A[i][j] == 1 for j in block_cols):
+                    block_rows.add(i)
+                    changed = True
             for j in range(col_ptr, m):
-                if j not in block_cols:
-                    if any(A[i, j] == 1 for i in block_rows):
-                        block_cols.add(j)
-                        changed = True
+                if j not in block_cols and any(A[i][j] == 1 for i in block_rows):
+                    block_cols.add(j)
+                    changed = True
 
-        # Only assign rows that are contiguous from row_ptr
-        # (stop at first gap to avoid absorbing later blocks)
         sorted_rows = sorted(block_rows)
-        contiguous_rows = []
+        contiguous = []
         for idx, r in enumerate(sorted_rows):
             if idx == 0 or r == sorted_rows[idx - 1] + 1:
-                contiguous_rows.append(r)
+                contiguous.append(r)
             else:
-                break  # gap found — stop here, remaining rows belong to next block
+                break
 
-        # Re-derive cols for only the contiguous rows
         final_cols = set(
             j for j in range(col_ptr, m)
-            if any(A[i, j] == 1 for i in contiguous_rows)
+            if any(A[i][j] == 1 for i in contiguous)
         )
 
-        for i in contiguous_rows:
+        for i in contiguous:
             groups[row_order[i]] = group_id
         for j in final_cols:
             part_cells[col_order[j]] = group_id
 
         col_ptr = max(final_cols) + 1 if final_cols else col_ptr + 1
-        row_ptr = max(contiguous_rows) + 1
+        row_ptr = max(contiguous) + 1
         group_id += 1
 
     return groups, part_cells
 
 
-# ─── Chaining Method ───────────────────────────────────────────────────────────
+def chaining_method(matrix):
+    n_parts = len(matrix)
+    n_machines = len(matrix[0]) if matrix else 0
 
-def chaining_method(matrix: list[list[int]]):
-    A = np.array(matrix, dtype=int)
-    n_machines = A.shape[1]  # columns = machines
-    n_parts    = A.shape[0]  # rows    = parts
-
-    # Step 1: build machine-machine link matrix
-    L = np.zeros((n_machines, n_machines), dtype=int)
+    L = [[0] * n_machines for _ in range(n_machines)]
     for j in range(n_machines):
         for k in range(j + 1, n_machines):
-            shared = int(np.sum((A[:, j] == 1) & (A[:, k] == 1)))
-            L[j, k] = shared
-            L[k, j] = shared
+            shared = sum(1 for i in range(n_parts) if matrix[i][j] == 1 and matrix[i][k] == 1)
+            L[j][k] = shared
+            L[k][j] = shared
 
-    # Step 2: classify links
-    link_types: dict[tuple[int,int], str] = {}
+    link_types = {}
     for j in range(n_machines):
         for k in range(n_machines):
             if j == k:
                 continue
-            v = L[j, k]
-            if v >= 2:
-                link_types[(j, k)] = "strong"
-            elif v == 1:
-                link_types[(j, k)] = "weak"
-            else:
-                link_types[(j, k)] = "none"
+            v = L[j][k]
+            link_types[(j, k)] = "strong" if v >= 2 else "weak" if v == 1 else "none"
 
-    # Step 3: Union-Find clustering — strong links first
     parent = list(range(n_machines))
 
     def find(x):
@@ -178,23 +127,18 @@ def chaining_method(matrix: list[list[int]]):
     def union(x, y):
         parent[find(x)] = find(y)
 
-    # Merge on strong links
     for j in range(n_machines):
         for k in range(j + 1, n_machines):
             if link_types.get((j, k)) == "strong":
                 union(j, k)
-
-    # Merge on weak links if no isolation
     for j in range(n_machines):
         for k in range(j + 1, n_machines):
             if link_types.get((j, k)) == "weak":
-                # Only merge if at least one side is already in a group (has strong link)
                 union(j, k)
 
-    # Normalize group IDs
-    root_map: dict[int, int] = {}
+    root_map = {}
     gid = 0
-    groups: dict[int, int] = {}
+    groups = {}
     for j in range(n_machines):
         r = find(j)
         if r not in root_map:
@@ -202,94 +146,75 @@ def chaining_method(matrix: list[list[int]]):
             gid += 1
         groups[j] = root_map[r]
 
-    # Assign parts to groups
-    part_cells: dict[int, int] = {}
+    part_cells = {}
     for i in range(n_parts):
-        touched = set(groups[j] for j in range(n_machines) if A[i, j] == 1)
+        touched = set(groups[j] for j in range(n_machines) if matrix[i][j] == 1)
         if len(touched) == 1:
             part_cells[i] = touched.pop()
-        # exceptional parts handled in analyze
 
-    # Build triangular schema
     triangular = []
     for j in range(n_machines):
         row = []
         for k in range(n_machines):
             if k > j:
-                row.append({"value": int(L[j, k]), "type": link_types.get((j, k), "none")})
+                row.append({"value": L[j][k], "type": link_types.get((j, k), "none")})
             elif k == j:
                 row.append({"value": 0, "type": "diagonal"})
             else:
                 row.append({"value": 0, "type": "empty"})
         triangular.append(row)
 
-    return groups, part_cells, L.tolist(), triangular
+    return groups, part_cells, L, triangular
 
 
-# ─── Analyze: exceptions + flows + efficiency ──────────────────────────────────
-
-def analyze(matrix: list[list[int]], groups: dict[int, int], routing: Optional[list[list[int]]] = None):
-    A = np.array(matrix, dtype=int)
-    n_parts, n_machines = A.shape
-
+def analyze(matrix, groups, routing=None):
+    n_parts = len(matrix)
+    n_machines = len(matrix[0]) if matrix else 0
     int_groups = {int(k): int(v) for k, v in groups.items()}
 
-    # Classify parts
-    exceptional_parts: list[int] = []
-    part_cells: dict[int, int] = {}
+    exceptional_parts = []
+    part_cells = {}
     for i in range(n_parts):
-        touched_groups = set(int_groups[j] for j in range(n_machines) if A[i, j] == 1 and j in int_groups)
-        if len(touched_groups) == 1:
-            part_cells[i] = touched_groups.pop()
-        elif len(touched_groups) > 1:
+        touched = set(int_groups[j] for j in range(n_machines) if matrix[i][j] == 1 and j in int_groups)
+        if len(touched) == 1:
+            part_cells[i] = touched.pop()
+        elif len(touched) > 1:
             exceptional_parts.append(i)
-            # assign to the group with the most operations for this part
             counts = {}
             for j in range(n_machines):
-                if A[i, j] == 1 and j in int_groups:
+                if matrix[i][j] == 1 and j in int_groups:
                     g = int_groups[j]
                     counts[g] = counts.get(g, 0) + 1
             part_cells[i] = max(counts, key=counts.get)
         else:
-            part_cells[i] = -1  # unassigned
+            part_cells[i] = -1
 
-    # Crossing flows
-    crossing_flows: list[dict] = []
+    crossing_flows = []
     if routing:
         for i, route in enumerate(routing):
             for step in range(len(route) - 1):
-                m_from = route[step]
-                m_to   = route[step + 1]
-                if m_from < n_machines and m_to < n_machines:
-                    g_from = int_groups.get(m_from, -1)
-                    g_to   = int_groups.get(m_to, -1)
-                    if g_from != g_to and g_from != -1 and g_to != -1:
-                        crossing_flows.append({
-                            "part": i,
-                            "from_machine": m_from,
-                            "to_machine": m_to,
-                            "from_group": g_from,
-                            "to_group": g_to,
-                        })
+                mf, mt = route[step], route[step + 1]
+                if mf < n_machines and mt < n_machines:
+                    gf = int_groups.get(mf, -1)
+                    gt = int_groups.get(mt, -1)
+                    if gf != gt and gf != -1 and gt != -1:
+                        crossing_flows.append({"part": i, "from_machine": mf, "to_machine": mt, "from_group": gf, "to_group": gt})
 
-    # Efficiency score
-    total_ops = int(np.sum(A))
-    internal_ops = 0
-    for i in range(n_parts):
-        for j in range(n_machines):
-            if A[i, j] == 1:
-                if part_cells.get(i, -2) == int_groups.get(j, -1):
-                    internal_ops += 1
+    total_ops = sum(matrix[i][j] for i in range(n_parts) for j in range(n_machines))
+    internal_ops = sum(
+        1 for i in range(n_parts) for j in range(n_machines)
+        if matrix[i][j] == 1 and part_cells.get(i, -2) == int_groups.get(j, -1)
+    )
     efficiency = round(internal_ops / total_ops, 4) if total_ops > 0 else 0.0
 
-    # Build cells summary
     all_groups = sorted(set(int_groups.values()))
-    cells_summary = {}
-    for g in all_groups:
-        cells_summary[g] = {
+    cells_summary = {
+        str(g): {
             "machines": [j for j, grp in int_groups.items() if grp == g],
-            "parts":    [i for i, grp in part_cells.items() if grp == g],
+            "parts": [i for i, grp in part_cells.items() if grp == g],
         }
+        for g in all_groups
+    }
 
     return {
         "exceptional_parts": exceptional_parts,
@@ -298,47 +223,77 @@ def analyze(matrix: list[list[int]], groups: dict[int, int], routing: Optional[l
         "efficiency": efficiency,
         "internal_ops": internal_ops,
         "total_ops": total_ops,
-        "cells_summary": {str(k): v for k, v in cells_summary.items()},
+        "cells_summary": cells_summary,
     }
 
 
-# ─── Endpoints ─────────────────────────────────────────────────────────────────
+# ─── Vercel serverless handler ─────────────────────────────────────────────────
 
-@app.post("/api/king")
-def king_endpoint(req: MatrixRequest):
-    reordered, row_order, col_order = king_method(req.matrix)
-    groups, part_cells = detect_cells_king(reordered, row_order, col_order)
-    analysis = analyze(req.matrix, groups)
+class handler(BaseHTTPRequestHandler):
 
-    return {
-        "reordered_matrix": reordered,
-        "row_order": row_order,
-        "col_order": col_order,
-        "groups": {str(k): v for k, v in groups.items()},
-        "part_cells": {str(k): v for k, v in part_cells.items()},
-        **analysis,
-    }
+    def do_OPTIONS(self):
+        self.send_response(200)
+        self._cors()
+        self.end_headers()
 
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = json.loads(self.rfile.read(length))
+        path = self.path.rstrip("/")
 
-@app.post("/api/chaining")
-def chaining_endpoint(req: MatrixRequest):
-    groups, part_cells, link_matrix, triangular = chaining_method(req.matrix)
-    analysis = analyze(req.matrix, groups)
+        try:
+            if path == "/api/king":
+                matrix = body["matrix"]
+                reordered, row_order, col_order = king_method(matrix)
+                groups, part_cells = detect_cells_king(reordered, row_order, col_order)
+                result = {
+                    "reordered_matrix": reordered,
+                    "row_order": row_order,
+                    "col_order": col_order,
+                    "groups": {str(k): v for k, v in groups.items()},
+                    "part_cells": {str(k): v for k, v in part_cells.items()},
+                    **analyze(matrix, groups),
+                }
 
-    return {
-        "groups": {str(k): v for k, v in groups.items()},
-        "part_cells": {str(k): v for k, v in part_cells.items()},
-        "link_matrix": link_matrix,
-        "triangular": triangular,
-        **analysis,
-    }
+            elif path == "/api/chaining":
+                matrix = body["matrix"]
+                groups, part_cells, link_matrix, triangular = chaining_method(matrix)
+                result = {
+                    "groups": {str(k): v for k, v in groups.items()},
+                    "part_cells": {str(k): v for k, v in part_cells.items()},
+                    "link_matrix": link_matrix,
+                    "triangular": triangular,
+                    **analyze(matrix, groups),
+                }
 
+            elif path == "/api/analyze":
+                matrix = body["matrix"]
+                groups = {int(k): int(v) for k, v in body["groups"].items()}
+                routing = body.get("routing")
+                result = analyze(matrix, groups, routing)
 
-@app.post("/api/analyze")
-def analyze_endpoint(req: AnalyzeRequest):
-    groups_int = {int(k): int(v) for k, v in req.groups.items()}
-    return analyze(req.matrix, groups_int, req.routing)
+            else:
+                self._respond(404, {"error": "Not found"})
+                return
 
+            self._respond(200, result)
 
-# ─── Vercel handler ────────────────────────────────────────────────────────────
-# Vercel looks for a variable named `app` — FastAPI IS that ASGI app, so nothing extra needed.
+        except Exception as e:
+            self._respond(500, {"error": str(e)})
+
+    def _cors(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+
+    def _respond(self, status, data):
+        body = json.dumps(data).encode()
+        self.send_response(status)
+        self._cors()
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, format, *args):
+        pass
